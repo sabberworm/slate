@@ -36,6 +36,8 @@ NSString *const SOURCE = @"source";
 NSString *const IF_EXISTS = @"if_exists";
 
 // Config Keys
+NSString *const MENU_BAR_ICON_HIDDEN = @"menuBarIconHidden";
+NSString *const MENU_BAR_ICON_HIDDEN_DEFAULT = @"false";
 NSString *const DEFAULT_TO_CURRENT_SCREEN = @"defaultToCurrentScreen";
 NSString *const DEFAULT_TO_CURRENT_SCREEN_DEFAULT = @"false";
 NSString *const NUDGE_PERCENT_OF = @"nudgePercentOf";
@@ -141,7 +143,7 @@ NSString *const SNAPSHOT_MAX_STACK_SIZE_DEFAULT = @"0";
 NSString *const UNDO_MAX_STACK_SIZE = @"undoMaxStackSize";
 NSString *const UNDO_MAX_STACK_SIZE_DEFAULT = @"10";
 NSString *const UNDO_OPS = @"undoOps";
-NSString *const UNDO_OPS_DEFAULT = @"activate-snapshot,chain,grid,layout,move,resize,sequence,shell";
+NSString *const UNDO_OPS_DEFAULT = @"activate-snapshot,chain,grid,layout,move,push,nudge,corner,throw,resize,sequence,shell";
 NSString *const GRID_BACKGROUND_COLOR = @"gridBackgroundColor";
 NSString *const GRID_BACKGROUND_COLOR_DEFAULT = @"75;77;81;1.0";
 NSString *const GRID_ROUNDED_CORNER_SIZE = @"gridRoundedCornerSize";
@@ -156,6 +158,10 @@ NSString *const LAYOUT_FOCUS_ON_ACTIVATE = @"layoutFocusOnActivate";
 NSString *const LAYOUT_FOCUS_ON_ACTIVATE_DEFAULT = @"false";
 NSString *const MODAL_ESCAPE_KEY = @"modalEscapeKey";
 NSString *const MODAL_ESCAPE_KEY_DEFAULT = @"";
+NSString *const JS_RECEIVE_MOVE_EVENT = @"jsReceiveMoveEvent";
+NSString *const JS_RECEIVE_MOVE_EVENT_DEFAULT = @"false";
+NSString *const JS_RECEIVE_RESIZE_EVENT = @"jsReceiveResizeEvent";
+NSString *const JS_RECEIVE_RESIZE_EVENT_DEFAULT = @"false";
 
 // Application Option Keys
 NSString *const IGNORE_FAIL = @"IGNORE_FAIL";
@@ -293,6 +299,7 @@ NSString *const EMPTY = @"";
 NSString *const PIPE_PADDED = @" | ";
 NSString *const GREATER_THAN_PADDED = @" > ";
 NSString *const QUOTES = @"'\"";
+NSString *const SPACE_WORD= @"<space>";
 NSString *const EQUALS = @"=";
 NSString *const TILDA = @"~";
 NSString *const SLASH = @"/";

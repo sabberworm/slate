@@ -1,4 +1,35 @@
-Current Version: 1.0.24
+Current Version: 1.2
+
+------------------ 1.2 ------------------
+
+- Remove support for OS X 10.7 and below
+- Add options to hide the menu bar icon (jigish/slate #371)
+- Converted the test suite to use XCTest
+
+------------------ 1.1 ------------------
+
+- Expose the bundle identifier in the Javascript API app object (jigish/slate #387)
+- Add a missing period in the README (jigish/slate #395)
+- Prevent Slate hanging due to unresponsive apps (jigish/slate #414)
+- Fixed snapshot operations to properly get the name from the config (jigish/slate #393)
+- Updated the README with info for Mavericks (jigish/slate #362)
+- Add the ability to use the delete from larger keyboards (jigish/slate #351)
+- Fix crash due to uninitialized variable (jigish/slate #344)
+
+
+----------------- 1.0.25 ----------------
+
+Updates to javascript configs
+- Issue #239 - add events and event listeners
+- Issue #252 - allow for integers in screenForRef
+- Issue #241 - fix order of operations related issues in corner operation
+- Issue #233 - allow numbers in options for move based operations
+- fix doop on window object
+- fix screenCount
+Issue #240 - add link to about page
+Issue #250 - load default config file properly
+Merge Pull Request #248 - fix undo for move based operations
+Merge Pull Request #253 - allow quoted arguments in shell operation
 
 ----------------- 1.0.24 ----------------
 

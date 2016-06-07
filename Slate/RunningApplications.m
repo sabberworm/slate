@@ -22,6 +22,10 @@
 #import "SlateLogger.h"
 #import "AccessibilityWrapper.h"
 #import "Constants.h"
+#import "JSController.h"
+#import "JSWindowWrapper.h"
+#import "JSApplicationWrapper.h"
+#import "SlateConfig.h"
 
 @implementation RunningApplications
 
@@ -39,6 +43,76 @@ static RunningApplications *_instance = nil;
 
 + (BOOL)isAppSelectable:(NSRunningApplication *)app {
   return [app activationPolicy] == NSApplicationActivationPolicyRegular;
+}
+
+static NSDictionary *eventNameDict = nil;
+
+static NSString *prettyifyEventName(NSString *event) {
+  if (eventNameDict == nil) {
+    eventNameDict = [NSDictionary dictionaryWithObjectsAndKeys:@"windowClosed", [NSString stringWithFormat:@"%@", kAXUIElementDestroyedNotification],
+                                                               @"windowMoved", [NSString stringWithFormat:@"%@", kAXMovedNotification],
+                                                               @"windowResized", [NSString stringWithFormat:@"%@", kAXResizedNotification],
+                                                               @"windowOpened", [NSString stringWithFormat:@"%@", kAXWindowCreatedNotification],
+                                                               @"windowFocused", [NSString stringWithFormat:@"%@", kAXFocusedWindowChangedNotification],
+                                                               @"windowTitleChanged", [NSString stringWithFormat:@"%@", kAXTitleChangedNotification],
+                                                               @"appClosed", NSWorkspaceDidTerminateApplicationNotification,
+                                                               @"appOpened", NSWorkspaceDidLaunchApplicationNotification,
+                                                               @"appHidden", NSWorkspaceDidHideApplicationNotification,
+                                                               @"appUnhidden", NSWorkspaceDidUnhideApplicationNotification,
+                                                               @"appActivated", NSWorkspaceDidActivateApplicationNotification,
+                                                               @"appDeactivated", NSWorkspaceDidDeactivateApplicationNotification, nil];
+  }
+  return [eventNameDict objectForKey:event];
+}
+
+static void runWindowJSCallbacks(AXUIElementRef element, CFStringRef notification) {
+  // Run any js callbacks
+  AccessibilityWrapper *openedWindow = [[AccessibilityWrapper alloc] initWithApp:[AccessibilityWrapper applicationForElement:element] window:element];
+  NSString *eventName = prettyifyEventName([NSString stringWithFormat:@"%@", notification]);
+  [[JSController getInstance] runCallbacks:eventName
+                                   payload:[[JSWindowWrapper alloc] initWithAccessibilityWrapper:openedWindow screenWrapper:[[ScreenWrapper alloc] init]]];
+}
+
+static void windowChanged(AXObserverRef observer, AXUIElementRef element, CFStringRef notification, void *refcon) {
+  RunningApplications *ref = (__bridge RunningApplications *)refcon;
+  SlateLogger(@">> WINDOW CHANGED, %@ <<", notification);
+  if (CFStringCompare(notification, kAXUIElementDestroyedNotification, 0) == kCFCompareEqualTo) {
+    SlateLogger(@">> WINDOW DESTROYED <<");
+    AXObserverRemoveNotification(observer, element, kAXUIElementDestroyedNotification);
+    AXObserverRemoveNotification(observer, element, kAXMovedNotification);
+    AXObserverRemoveNotification(observer, element, kAXResizedNotification);
+    [ref pruneWindows];
+  }
+  NSString *eventName = prettyifyEventName([NSString stringWithFormat:@"%@", notification]);
+  [[JSController getInstance] runCallbacks:eventName
+                                   payload:[[JSApplicationWrapper alloc] initWithRunningApplication:[NSRunningApplication runningApplicationWithProcessIdentifier:[AccessibilityWrapper processIdentifierOfUIElement:element]] screenWrapper:[[ScreenWrapper alloc] init]]];
+}
+
+static void registerForWindowDeath(AXUIElementRef element, RunningApplications *ref) {
+  // register for death event
+  AXError err;
+  AXObserverRef observer;
+  AXObserverCreate([AccessibilityWrapper processIdentifierOfUIElement:element], windowChanged, &observer);
+  err = AXObserverAddNotification(observer, element, kAXUIElementDestroyedNotification, (__bridge void *)ref);
+  if (err != kAXErrorSuccess) {
+    AXObserverRemoveNotification(observer, element, kAXUIElementDestroyedNotification);
+    return;
+  }
+  if ([[SlateConfig getInstance] getBoolConfig:JS_RECEIVE_MOVE_EVENT]) {
+    err = AXObserverAddNotification(observer, element, kAXMovedNotification, (__bridge void *)ref);
+    if (err != kAXErrorSuccess) {
+      AXObserverRemoveNotification(observer, element, kAXMovedNotification);
+      return;
+    }
+  }
+  if ([[SlateConfig getInstance] getBoolConfig:JS_RECEIVE_RESIZE_EVENT]) {
+    err = AXObserverAddNotification(observer, element, kAXResizedNotification, (__bridge void *)ref);
+    if (err != kAXErrorSuccess) {
+      AXObserverRemoveNotification(observer, element, kAXResizedNotification);
+      return;
+    }
+  }
+  CFRunLoopAddSource ([[NSRunLoop currentRunLoop] getCFRunLoop], AXObserverGetRunLoopSource(observer), kCFRunLoopDefaultMode);
 }
 
 // WINDOW INFO:
@@ -67,6 +141,7 @@ static void windowCreated(pid_t currPID, AXUIElementRef element, RunningApplicat
     [[ref titleToWindow] setObject:[NSMutableArray arrayWithObject:windowInfo] forKey:title];
   }
   [[[ref appToWindows] objectForKey:[NSNumber numberWithInteger:currPID]] addObject:windowInfo];
+  registerForWindowDeath(element, ref);
 }
 
 + (NSRunningApplication *)focusedApp {
@@ -95,6 +170,7 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
     if (!windowsArr || CFArrayGetCount(windowsArr) == 0) return;
     if (oldWindowsInApp == nil || [oldWindowsInApp count] == 0) {
       windowCreated(currPID, element, ref);
+      runWindowJSCallbacks(element, notification);
       return;
     }
     // set up title counts
@@ -149,22 +225,26 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
             [[ref titleToWindow] setObject:windowsForTitle forKey:[windowInfo objectAtIndex:0]];
           }
           [ref pruneWindows];
+          runWindowJSCallbacks(element, notification);
           return;
         }
       }
     }
     [ref pruneWindows];
+    runWindowJSCallbacks(element, notification);
     return;
   }
 
   // Focus Changed, update windows
   if (CFStringCompare(notification, kAXFocusedWindowChangedNotification, 0) == kCFCompareEqualTo) {
     [ref pruneWindows];
+    runWindowJSCallbacks(element, notification);
     return;
   }
 
   // Window created, add to windows
   windowCreated(currPID, element, ref);
+  runWindowJSCallbacks(element, notification);
   SlateLogger(@">>> END %@ for %@", notification, [AccessibilityWrapper getRole:element]);
 }
 
@@ -221,6 +301,7 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
               [windowsForTitle addObject:windowInfo];
               [titleToWindow setObject:windowsForTitle forKey:title];
             }
+            registerForWindowDeath(window, self);
             nextWindowNumber++;
           }
         }
@@ -230,12 +311,18 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
         AXError err;
         AXUIElementRef sendingApp = AXUIElementCreateApplication([app processIdentifier]);
         AXObserverRef observer;
-        err = AXObserverCreate([app processIdentifier], windowCallback, &observer);
-        err = AXObserverAddNotification(observer, sendingApp, kAXWindowCreatedNotification, (__bridge void *)self);
-        err = AXObserverAddNotification(observer, sendingApp, kAXFocusedWindowChangedNotification, (__bridge void *)self);
+        AXObserverCreate([app processIdentifier], windowCallback, &observer);
+        AXObserverAddNotification(observer, sendingApp, kAXWindowCreatedNotification, (__bridge void *)self);
+        AXObserverAddNotification(observer, sendingApp, kAXFocusedWindowChangedNotification, (__bridge void *)self);
         err = AXObserverAddNotification(observer, sendingApp, kAXTitleChangedNotification, (__bridge void *)self);
-        CFRunLoopAddSource ([[NSRunLoop currentRunLoop] getCFRunLoop], AXObserverGetRunLoopSource(observer), kCFRunLoopDefaultMode);
-        [pidToObserver setObject:[NSValue valueWithPointer:observer] forKey:[NSNumber numberWithInteger:[app processIdentifier]]];
+        if (err != kAXErrorSuccess) {
+          AXObserverRemoveNotification(observer, sendingApp, kAXWindowCreatedNotification);
+          AXObserverRemoveNotification(observer, sendingApp, kAXFocusedWindowChangedNotification);
+          AXObserverRemoveNotification(observer, sendingApp, kAXTitleChangedNotification);
+        } else {
+          CFRunLoopAddSource ([[NSRunLoop currentRunLoop] getCFRunLoop], AXObserverGetRunLoopSource(observer), kCFRunLoopDefaultMode);
+          [pidToObserver setObject:[NSValue valueWithPointer:observer] forKey:[NSNumber numberWithInteger:[app processIdentifier]]];
+        }
       }
     }
     SlateLogger(@"CURRENT APP = '%@'", [currentApp localizedName]);
@@ -326,9 +413,9 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
   }
 }
 
-- (void)notificationRecieved:(id)notification {
+/*- (void)notificationRecieved:(id)notification {
   SlateLogger(@"NOTE RECIEVED: %@", [notification name]);
-}
+}*/
 
 - (void)applicationActivated:(id)notification {
   SlateLogger(@"Activated: %@", [notification name]);
@@ -336,10 +423,17 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
   if ([[activatedApp localizedName] isEqualToString:@"Slate"]) return;
   [self bringAppToFront:activatedApp];
   [self pruneWindows];
+  NSString *eventName = prettyifyEventName([notification name]);
+  [[JSController getInstance] runCallbacks:eventName
+                                   payload:[[JSApplicationWrapper alloc] initWithRunningApplication:activatedApp screenWrapper:[[ScreenWrapper alloc] init]]];
 }
 
 - (void)applicationDeactivated:(id)notification {
   SlateLogger(@"Deactivated: %@", [notification name]);
+  NSRunningApplication *deactivatedApp = [[notification userInfo] objectForKey:NSWorkspaceApplicationKey];
+  NSString *eventName = prettyifyEventName([notification name]);
+  [[JSController getInstance] runCallbacks:eventName
+                                   payload:[[JSApplicationWrapper alloc] initWithRunningApplication:deactivatedApp screenWrapper:[[ScreenWrapper alloc] init]]];
 }
 
 - (void)applicationLaunched:(id)notification {
@@ -348,6 +442,22 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
   if ([[launchedApp localizedName] isEqualToString:@"Slate"]) return;
   NSNumber *appPID = [NSNumber numberWithInteger:[launchedApp processIdentifier]];
   [appToWindows setObject:[NSMutableArray array] forKey:appPID];
+  AXError err;
+  AXUIElementRef sendingApp = AXUIElementCreateApplication([launchedApp processIdentifier]);
+  AXObserverRef observer;
+  err = AXObserverCreate([launchedApp processIdentifier], windowCallback, &observer);
+  if (err != kAXErrorSuccess) return;
+  AXObserverAddNotification(observer, sendingApp, kAXWindowCreatedNotification, (__bridge void *)self);
+  AXObserverAddNotification(observer, sendingApp, kAXFocusedWindowChangedNotification, (__bridge void *)self);
+  err = AXObserverAddNotification(observer, sendingApp, kAXTitleChangedNotification, (__bridge void *)self);
+  if (err != kAXErrorSuccess) {
+    AXObserverRemoveNotification(observer, AXUIElementCreateApplication([launchedApp processIdentifier]), kAXWindowCreatedNotification);
+    AXObserverRemoveNotification(observer, AXUIElementCreateApplication([launchedApp processIdentifier]), kAXFocusedWindowChangedNotification);
+    AXObserverRemoveNotification(observer, AXUIElementCreateApplication([launchedApp processIdentifier]), kAXTitleChangedNotification);
+    return;
+  }
+  CFRunLoopAddSource ([[NSRunLoop currentRunLoop] getCFRunLoop], AXObserverGetRunLoopSource(observer), kCFRunLoopDefaultMode);
+  [pidToObserver setObject:[NSValue valueWithPointer:observer] forKey:[NSNumber numberWithInteger:[launchedApp processIdentifier]]];
   // add already created windows
   CFArrayRef windowsArr = [AccessibilityWrapper windowsInApp:AXUIElementCreateApplication([launchedApp processIdentifier])];
   if (windowsArr != NULL) {
@@ -376,24 +486,11 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
       [[[self appToWindows] objectForKey:[NSNumber numberWithInteger:[launchedApp processIdentifier]]] addObject:windowInfo];
     }
   }
-  AXError err;
-  AXUIElementRef sendingApp = AXUIElementCreateApplication([launchedApp processIdentifier]);
-  AXObserverRef observer;
-  err = AXObserverCreate([launchedApp processIdentifier], windowCallback, &observer);
-  if (err != kAXErrorSuccess) return;
-  err = AXObserverAddNotification(observer, sendingApp, kAXWindowCreatedNotification, (__bridge void *)self);
-  err = AXObserverAddNotification(observer, sendingApp, kAXFocusedWindowChangedNotification, (__bridge void *)self);
-  err = AXObserverAddNotification(observer, sendingApp, kAXTitleChangedNotification, (__bridge void *)self);
-  if (err != kAXErrorSuccess) {
-    AXObserverRemoveNotification(observer, AXUIElementCreateApplication([launchedApp processIdentifier]), kAXWindowCreatedNotification);
-    AXObserverRemoveNotification(observer, AXUIElementCreateApplication([launchedApp processIdentifier]), kAXFocusedWindowChangedNotification);
-    AXObserverRemoveNotification(observer, AXUIElementCreateApplication([launchedApp processIdentifier]), kAXTitleChangedNotification);
-    return;
-  }
-  CFRunLoopAddSource ([[NSRunLoop currentRunLoop] getCFRunLoop], AXObserverGetRunLoopSource(observer), kCFRunLoopDefaultMode);
-  [pidToObserver setObject:[NSValue valueWithPointer:observer] forKey:[NSNumber numberWithInteger:[launchedApp processIdentifier]]];
   [self bringAppToFront:launchedApp];
   [self pruneWindows];
+  NSString *eventName = prettyifyEventName([notification name]);
+  [[JSController getInstance] runCallbacks:eventName
+                                   payload:[[JSApplicationWrapper alloc] initWithRunningApplication:launchedApp screenWrapper:[[ScreenWrapper alloc] init]]];
 }
 
 - (void)applicationKilled:(id)notification {
@@ -409,6 +506,9 @@ static void windowCallback(AXObserverRef observer, AXUIElementRef element, CFStr
   [pidToObserver removeObjectForKey:[NSNumber numberWithInteger:[app processIdentifier]]];
   [self pruneWindows];
   [self bringAppToFront:[self currentApplication]];
+  NSString *eventName = prettyifyEventName([notification name]);
+  [[JSController getInstance] runCallbacks:eventName
+                                   payload:[[JSApplicationWrapper alloc] initWithRunningApplication:app screenWrapper:[[ScreenWrapper alloc] init]]];
 }
 
 - (void)bringAppToFront:(NSRunningApplication *)app {
